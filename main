@@ -1,0 +1,220 @@
+EnablePrimaryMouseButtonEvents(true)
+
+-- ========================================
+-- 武器配置预设区
+-- ========================================
+local weapon_presets = {
+  {
+    name = "SCW10",
+    first_shot = { count = 14, v_speed = 25, h_speed = 10,  v_interval = 75, h_interval = 75 },
+    v_speed = 18, h_speed = 8, v_interval = 75, h_interval = 75, mode = "both", h_direction = -1
+  },
+  {
+    name = "6p67",
+    first_shot = { count = 22, v_speed = 15, h_speed = 7, v_interval = 66, h_interval = 66 },
+    v_speed = 8, h_speed = 6, v_interval = 66, h_interval = 66, mode = "both", h_direction = 1
+  },
+  {
+    name = "M433",
+    first_shot = { count = 22, v_speed = 22, h_speed = 16,  v_interval = 72, h_interval = 72 },
+    v_speed = 16, h_speed = 10, v_interval = 72, h_interval = 72, mode = "both", h_direction = -1
+  },
+  {
+    name = "TR7",
+    first_shot = { count = 15, v_speed = 30, h_speed = 19, v_interval = 83, h_interval = 83 },
+    v_speed = 25, h_speed = 12, v_interval = 83, h_interval = 83, mode = "both", h_direction = 1
+  },
+  {
+    name = "KV9",
+    first_shot = { count = 18, v_speed = 14, h_speed = 6, v_interval = 55.5, h_interval = 55.5 },
+    v_speed = 14, h_speed = 6, v_interval = 55.5, h_interval = 55.5, mode = "both", h_direction = 1
+  },
+  {
+    name = "M250",
+    first_shot = { count = 30, v_speed = 36, h_speed = 8, v_interval = 88.8, h_interval = 88.8 },
+    v_speed = 26, h_speed = 8, v_interval = 88.8, h_interval = 88.8, mode = "both", h_direction = -1
+  },
+{
+    name = "IAR",
+    first_shot = { count = 18, v_speed = 21, h_speed = 4, v_interval = 77.8, h_interval = 77.8 },
+    v_speed = 17, h_speed = 3, v_interval = 77.8, h_interval = 77.8, mode = "both", h_direction = -1
+  }
+}
+-- ========================================
+-- 连点参数（可调）
+-- ========================================
+local auto_click_interval = 50   -- 每次点击周期(ms)，≈20CPS
+local auto_click_press_ms = 10   -- 按下保持(ms)，建议 8~12
+
+-- ========================================
+-- 全局变量
+-- ========================================
+local recoil_toggle = true       -- 中键3开/关“压枪”
+local current_preset = 1
+local total_presets = #weapon_presets
+local cached_preset = weapon_presets[current_preset]
+local shot_counter = 0
+
+-- ========================================
+-- 辅助：显示配置
+-- ========================================
+local function show_preset_info(preset, preset_num)
+  OutputLogMessage("==========================================\n")
+  OutputLogMessage("配置 %d/%d: %s\n", preset_num, total_presets, preset.name)
+  OutputLogMessage("------------------------------------------\n")
+  if preset.first_shot then
+    OutputLogMessage("[首发补偿] 前 %d 发\n", preset.first_shot.count)
+    OutputLogMessage("  垂直速度:%d  水平速度:%d\n", preset.first_shot.v_speed, preset.first_shot.h_speed)
+    OutputLogMessage("  垂直间隔:%dms  水平间隔:%dms\n", preset.first_shot.v_interval, preset.first_shot.h_interval)
+    OutputLogMessage("\n[后续配置] 第 %d 发起\n", preset.first_shot.count + 1)
+  else
+    OutputLogMessage("[无首发补偿] 全程统一参数\n")
+  end
+  OutputLogMessage("  垂直速度:%d  水平速度:%d\n", preset.v_speed, preset.h_speed)
+  OutputLogMessage("  垂直间隔:%dms  水平间隔:%dms\n", preset.v_interval, preset.h_interval)
+  local dir = (preset.h_direction < 0 and "向左") or (preset.h_direction > 0 and "向右") or "无偏移"
+  OutputLogMessage("  水平方向:%s\n", dir)
+  OutputLogMessage("==========================================\n")
+end
+
+-- ========================================
+-- 主事件
+-- ========================================
+function OnEvent(event, arg)
+
+  -- 中键(3)：开关压枪
+  if event == "MOUSE_BUTTON_PRESSED" and arg == 3 then
+    recoil_toggle = not recoil_toggle
+    OutputLogMessage("\n==========================================\n")
+    OutputLogMessage("压枪功能: %s\n", recoil_toggle and "[开启]" or "[关闭]")
+    if recoil_toggle then OutputLogMessage("当前配置: %s\n", weapon_presets[current_preset].name) end
+    OutputLogMessage("==========================================\n\n")
+  end
+
+  -- 侧键(4)：按住 = 连点 +（如开启）压枪；松开 = 停止
+  if event == "MOUSE_BUTTON_PRESSED" and arg == 4 then
+    -- 防抖：确认确实按住了4
+    Sleep(30)
+    if not IsMouseButtonPressed(4) then
+      -- 若这里就松开了，不打印“开始”，直接退出
+      return
+    end
+
+    local period = math.max(2, auto_click_interval)
+    local press_ms = math.max(1, math.min(auto_click_press_ms, period - 1))
+
+    local start_t = GetRunningTime()
+    local v_last, h_last, click_last = 0, 0, -period
+    local click_down, click_down_at = false, 0
+    shot_counter = 0
+
+    OutputLogMessage("[4键按下] 连点开始: 周期 %dms, 按下 %dms, 约每秒 %d 次\n",
+                     period, press_ms, math.floor(1000 / period))
+
+    while IsMouseButtonPressed(4) do
+      local t = GetRunningTime() - start_t
+
+      -- ===== 连点（状态机，保证周期稳定） =====
+      if (not click_down) and (t - click_last >= period) then
+        PressMouseButton(1)
+        click_down = true
+        click_down_at = t
+        click_last = t
+      elseif click_down and (t - click_down_at >= press_ms) then
+        ReleaseMouseButton(1)
+        click_down = false
+      end
+
+      -- ===== 压枪（取决于总开关） =====
+      if recoil_toggle then
+        local p = cached_preset
+        local v_speed, h_speed, v_itv, h_itv
+        if p.first_shot and shot_counter < p.first_shot.count then
+          v_speed, h_speed = p.first_shot.v_speed, p.first_shot.h_speed
+          v_itv, h_itv = p.first_shot.v_interval, p.first_shot.h_interval
+        else
+          v_speed, h_speed = p.v_speed, p.h_speed
+          v_itv, h_itv = p.v_interval, p.h_interval
+        end
+
+        if (p.mode == "vertical" or p.mode == "both") and (t - v_last >= v_itv) then
+          MoveMouseRelative(0, v_speed)
+          v_last = t
+          shot_counter = shot_counter + 1
+        end
+        if (p.mode == "horizontal" or p.mode == "both") and h_itv > 0 and (t - h_last >= h_itv) then
+          MoveMouseRelative(h_speed * p.h_direction, 0)
+          h_last = t
+        end
+      end
+
+      Sleep(1)
+    end
+
+    if click_down then ReleaseMouseButton(1) end
+    OutputLogMessage("[4键松开] 连点结束\n")
+  end
+
+  -- 侧键(5)：切换压枪配置
+  if event == "MOUSE_BUTTON_PRESSED" and arg == 5 then
+    current_preset = current_preset % total_presets + 1
+    cached_preset = weapon_presets[current_preset]
+    shot_counter = 0
+    OutputLogMessage("\n"); show_preset_info(cached_preset, current_preset); OutputLogMessage("\n")
+  end
+
+  -- 左键(1)：仅压枪（适合全自动/点射不需要连点时）
+  if event == "MOUSE_BUTTON_PRESSED" and arg == 1 and recoil_toggle then
+    local p = cached_preset
+    local v_last, h_last = 0, 0
+    local start_t = GetRunningTime()
+    shot_counter = 0
+
+    repeat
+      local t = GetRunningTime() - start_t
+      local v_speed, h_speed, v_itv, h_itv
+      if p.first_shot and shot_counter < p.first_shot.count then
+        v_speed, h_speed = p.first_shot.v_speed, p.first_shot.h_speed
+        v_itv, h_itv = p.first_shot.v_interval, p.first_shot.h_interval
+      else
+        v_speed, h_speed = p.v_speed, p.h_speed
+        v_itv, h_itv = p.v_interval, p.h_interval
+      end
+
+      if (p.mode == "vertical" or p.mode == "both") and (t - v_last >= v_itv) then
+        MoveMouseRelative(0, v_speed)
+        v_last = t
+        shot_counter = shot_counter + 1
+      end
+      if (p.mode == "horizontal" or p.mode == "both") and h_itv > 0 and (t - h_last >= h_itv) then
+        MoveMouseRelative(h_speed * p.h_direction, 0)
+        h_last = t
+      end
+
+      Sleep(1)
+    until not IsMouseButtonPressed(1) or not recoil_toggle
+  end
+
+  -- 松开重置计数
+  if event == "MOUSE_BUTTON_RELEASED" and (arg == 1 or arg == 4) then
+    shot_counter = 0
+  end
+end
+
+-- ========================================
+-- 初始化
+-- ========================================
+OutputLogMessage("\n==========================================\n")
+OutputLogMessage("  4键连点 + 压枪脚本已加载\n")
+OutputLogMessage("==========================================\n")
+OutputLogMessage("按键:\n")
+OutputLogMessage("  中键(3) - 开/关压枪\n")
+OutputLogMessage("  侧键(4) - 按住：连点 +（如开启）压枪；松开停止\n")
+OutputLogMessage("  侧键(5) - 切换武器配置\n")
+OutputLogMessage("  左键(1) - 按住仅压枪\n")
+OutputLogMessage("------------------------------------------\n")
+OutputLogMessage("连点：周期 %dms，按下 %dms（≈每秒 %d 次）\n",
+                  auto_click_interval, auto_click_press_ms, math.floor(1000 / math.max(2, auto_click_interval)))
+OutputLogMessage("==========================================\n\n")
+show_preset_info(weapon_presets[current_preset], current_preset)
+OutputLogMessage("\n")
